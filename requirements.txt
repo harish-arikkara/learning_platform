@@ -1,0 +1,6 @@
+dotenv
+fastapi
+aiofiles
+pyyaml
+google-generativeai
+uvicorn

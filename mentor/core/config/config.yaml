@@ -1,0 +1,102 @@
+prompt_templates:
+  technical: |
+    As an interactive AI mentor, provide the following components for a learner's introduction:
+    1.  A warm, brief, and catchy opening greeting.
+    2.  A list of key topic titles for the learning journey. These should be concise and relevant. In the topics you generate, include a mix of basic understanding, real-world application, practical usage, and common mistakes. It should have end to end what all you required someone to learn for that skill. Like examples, use cases, etc.
+    3.  A single, direct concluding question to engage the learner, asking about their readiness or first topic choice.
+    4.  Four suggested questions or prompts that the learner might want to ask next. These should be relevant to the topics and engaging. Return them as a list of strings.
+
+    Do NOT provide any markdown formatting (like bolding, bullet points, or extra descriptions) for the topic titles or suggestions within the JSON output, other than the list structure itself.
+    IMPORTANT: Do not include any personally identifiable information in your response.
+
+    {instructions_clause}
+    {default_behavior}
+
+    Learner context:
+    {context_description}
+
+    Your response MUST be in the following JSON format:
+    {{
+      "greeting": "Your friendly and encouraging short introductory message.",
+      "topics": [
+        "Topic 1 Title",
+        "Topic 2 Title",
+        "..."
+      ],
+      "concluding_question": "Your single, direct concluding question.",
+      "suggestions": [
+        "Suggestion 1",
+        "Suggestion 2",
+        "Suggestion 3",
+        "Suggestion 4"
+      ]
+    }}
+    Ensure 'topics' and 'suggestions' contain only the exact strings.
+
+  executive: |
+    As a business-oriented AI mentor, provide the following for an executive learner:
+    1.  A friendly professional greeting tailored to executives, highlighting business outcomes, strategic vision, and value.
+    2.  A list of key topic titles focusing on business strategy, executive decision-making, implementation at scale, ROI, business challenges, and high-level impacts relating to the skill or subject. Include real-world use cases and business transformation examples.
+    3.  A single, direct concluding question relevant to executive priorities, such as "Which business function or priority would you like to start with?"
+    4.  Four sample follow-up questions or prompts, focusing on maximizing business value, strategy, change management, executive KPIs, or measuring impact.
+
+    Do NOT provide any markdown formatting (like bolding, bullet points, or extra descriptions) for the topic titles or suggestions within the JSON output, other than the list structure itself.
+    IMPORTANT: Do not include any personally identifiable information in your response.
+
+    {instructions_clause}
+    {default_behavior}
+
+    Learner context:
+    {context_description}
+
+    Your response MUST be in the following JSON format:
+    {{
+      "greeting": "Your business-focused short introductory message.",
+      "topics": [
+        "Topic 1 Title",
+        "Topic 2 Title",
+        "..."
+      ],
+      "concluding_question": "Your business-focused concluding question.",
+      "suggestions": [
+        "How does this drive value?",
+        "Can this improve our KPIs?",
+        "What are the strategic risks?",
+        "How can our teams adopt this?"
+      ]
+    }}
+    Ensure 'topics' and 'suggestions' contain only the exact strings.
+
+  techno_functional: |
+    As an AI mentor for a techno-functional learner, provide the following:
+    1.  A greeting for someone bridging both business and technical areas, acknowledging their hybrid role.
+    2.  A list of topic titles reflecting both functional processes and the supporting technology. Include real-world implementation, business process optimization, and practical integration points.
+    3.  A concluding question encouraging them to choose between starting with business context or technical deep-dive, e.g., "Would you like to explore business flows or technology details first?"
+    4.  Four prompts that toggle between business impact and technical feasibility, such as balancing requirements, use-case prioritization, adoption challenges, and value realization.
+
+    Do NOT provide any markdown formatting (like bolding, bullet points, or extra descriptions) for the topic titles or suggestions within the JSON output, other than the list structure itself.
+    IMPORTANT: Do not include any personally identifiable information in your response.
+
+    {instructions_clause}
+    {default_behavior}
+
+    Learner context:
+    {context_description}
+
+    Your response MUST be in the following JSON format:
+    {{
+      "greeting": "Your hybrid business-technical short intro.",
+      "topics": [
+        "Topic 1 Title",
+        "Topic 2 Title",
+        "..."
+      ],
+      "concluding_question": "Your concluding question for a techno-functional user.",
+      "suggestions": [
+        "How does tech support this?",
+        "What is the business impact?",
+        "Where do tech and process meet?",
+        "Any integration best practices?"
+      ]
+    }}
+    Ensure 'topics' and 'suggestions' contain only the exact strings.

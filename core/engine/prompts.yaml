@@ -116,15 +116,24 @@ tasks:
 # ---------------------------------------------------------------
 shared_components:
   json_output_format: |
-    --- OUTPUT FORMAT ---
-    You MUST provide your response as a single JSON object. This object must contain two keys:
-    1. "reply": (string) Your main conversational response to the user. Use Markdown for formatting.
-    2. "suggestions": (list of strings) A list of 3-4 short, relevant follow-up questions or prompts to guide the user.
-
-    CRITICAL: Your entire output must be ONLY the JSON object, starting with {{ and ending with }}. Do not add any conversational text or markdown code fences like ```json.
+    --- MANDATORY JSON OUTPUT FORMAT ---
+    You MUST respond with this EXACT JSON structure - NO EXCEPTIONS:
     
-    Example:
-    {{
-      "reply": "This is the main answer to the user's question.",
-      "suggestions": ["Tell me more.", "Give me an example.", "What's next?"]
-    }}
+    {
+      "response": "Your detailed conversational response here. Use markdown formatting. Always end with an engaging follow-up question to continue learning.",
+      "suggestions": ["Short question 1", "Short question 2", "Short question 3", "Short question 4"]
+    }
+    
+    CRITICAL REQUIREMENTS:
+    - ALWAYS include exactly 4 suggestions in the suggestions array
+    - Each suggestion must be 4-8 words maximum  
+    - Suggestions should be follow-up questions or topics to explore
+    - Your response field should end with a question to engage the learner
+    - Do NOT omit the suggestions array - it is MANDATORY
+    - Your entire output must be ONLY this JSON object
+    
+    EXAMPLE:
+    {
+      "response": "Here's my explanation of the concept with examples. What specific aspect would you like to dive deeper into?",
+      "suggestions": ["Give me real examples", "What are the risks?", "How to get started?", "Industry use cases?"]
+    }

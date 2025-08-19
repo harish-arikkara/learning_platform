@@ -51,6 +51,43 @@ class MentorEngine:
     def _sanitize_text(s: Optional[str]) -> str:
         return (s or "").strip()
 
+    @staticmethod
+    def _safe_json_parse(response_text: str) -> Dict[str, Any]:
+        """Safely parse JSON response with multiple fallback attempts"""
+        if not response_text.strip():
+            return {}
+        
+        try:
+            # First attempt: direct parsing
+            return json.loads(response_text)
+        except json.JSONDecodeError:
+            pass
+        
+        try:
+            # Second attempt: look for nested JSON in "response" field
+            data = json.loads(response_text)
+            if isinstance(data, dict) and "response" in data:
+                try:
+                    return json.loads(data["response"])
+                except (json.JSONDecodeError, TypeError):
+                    return data
+            return data
+        except json.JSONDecodeError:
+            pass
+        
+        # Third attempt: extract JSON-like content using regex
+        import re
+        json_match = re.search(r'\{.*\}', response_text, re.DOTALL)
+        if json_match:
+            try:
+                return json.loads(json_match.group(0))
+            except json.JSONDecodeError:
+                pass
+        
+        # Final fallback
+        log.warning("Could not parse JSON from response: %s", response_text[:200])
+        return {"error": "Failed to parse response", "raw_response": response_text}
+
     async def _get_conversation_summary(self, chat_title: str, chat_history: List[Dict[str, Any]]) -> str:
         log.debug("Getting conversation summary for title=%s, messages=%d", chat_title, len(chat_history))
         if len(chat_history) < 10:
@@ -79,6 +116,7 @@ class MentorEngine:
     ) -> Tuple[str, List[str], List[str]]:
         log.info("Generating intro and topics for role=%s", role or "default")
         role = role or "default"
+        
         default_behavior = self.prompts.get("default_instructions", "")
         role_prompt = self.prompts["roles"].get(role, self.prompts["roles"]["default"])
         prompt_template = self.prompts["tasks"]["generate_intro_and_topics"]
@@ -87,28 +125,43 @@ class MentorEngine:
             context_description=self._sanitize_text(context_description),
             role_prompt=self._sanitize_text(role_prompt),
             default_behavior=self._sanitize_text(default_behavior),
-            extra_instructions=self._sanitize_text(extra_instructions),
+            extra_instructions=self._sanitize_text(extra_instructions) or "",
         )
 
         log.debug("Prompt content for intro/topics: %s", prompt_content)
         messages = [{"role": "user", "content": prompt_content}]
-        llm_response = await self.conn.generate_chat_completion(messages=messages, temperature=0.5, json_mode=True)
+        
+        llm_response = await self.conn.generate_chat_completion(
+            messages=messages, 
+            temperature=0.5, 
+            json_mode=True,
+            max_tokens=2048
+        )
         log.debug("Raw LLM response: %s", llm_response)
 
-        try:
-            parsed = json.loads(llm_response)
-            if isinstance(parsed, dict) and "response" in parsed and isinstance(parsed["response"], str):
-                parsed = json.loads(parsed["response"])
-        except Exception as e:
-            log.warning("Failed to parse LLM response: %s", e)
+        parsed = self._safe_json_parse(llm_response)
+        
+        if "error" in parsed:
+            log.warning("JSON parsing failed, using fallback")
             return self._fallback_intro()
 
-        greeting = self._sanitize_text(parsed.get("greeting"))
-        topics = [self._sanitize_text(t) for t in parsed.get("topics", []) if str(t).strip()]
-        question = self._sanitize_text(parsed.get("concluding_question"))
-        suggestions = [self._sanitize_text(s) for s in parsed.get("suggestions", []) if str(s).strip()]
+        greeting = self._sanitize_text(parsed.get("greeting", ""))
+        topics = [self._sanitize_text(str(t)) for t in parsed.get("topics", []) if str(t).strip()]
+        question = self._sanitize_text(parsed.get("concluding_question", ""))
+        suggestions = [self._sanitize_text(str(s)) for s in parsed.get("suggestions", []) if str(s).strip()]
 
-        log.info("Intro generated: greeting=%s, topics=%d, suggestions=%d", greeting, len(topics), len(suggestions))
+        # Ensure we have at least some content
+        if not greeting:
+            greeting = "Hello! I'm your AI mentor, ready to guide you through your learning journey."
+        if not topics:
+            topics = ["Introduction", "Core Concepts", "Practical Applications", "Advanced Topics"]
+        if not question:
+            question = "What would you like to explore first?"
+        if not suggestions:
+            suggestions = ["What should I focus on?", "Can you explain the basics?", "Show me examples", "How does this work?"]
+
+        log.info("Intro generated: greeting=%s, topics=%d, suggestions=%d", greeting[:50], len(topics), len(suggestions))
+        
         intro = (
             f"{greeting}\n\nHere are the topics we'll explore:\n- " + "\n- ".join(topics) + f"\n\n{question}"
             if topics else f"{greeting}\n\n{question}"
@@ -160,53 +213,72 @@ class MentorEngine:
         role_instruction = self.prompts["roles"].get(role, self.prompts["roles"]["default"])
         default_instruction = self.prompts.get("default_instructions", "")
         json_output_instruction = self.prompts["shared_components"].get("json_output_format", "")
+        
         system_prompt = self.prompts["tasks"]["chat"]["system_prompt"].format(
             context_summary="\n".join(context_lines),
             role_instruction=role_instruction,
             default_instruction=default_instruction,
             json_output_instruction=json_output_instruction,
         )
+        
         user_prompt = self.prompts["tasks"]["chat"]["user_prompt_wrapper"].format(
             summary=summary or "(no prior summary)"
         )
 
         messages = [
             {"role": "system", "content": system_prompt},
-            *chat_history[-6:],
+            *chat_history[-6:],  # Only use last 6 messages to avoid token limits
             {"role": "user", "content": user_prompt}
         ]
 
         log.debug("System prompt: %s", system_prompt)
-        llm_response = await self.conn.generate_chat_completion(messages=messages, temperature=0.5, json_mode=True)
+        llm_response = await self.conn.generate_chat_completion(
+            messages=messages, 
+            temperature=0.5, 
+            json_mode=True,
+            max_tokens=1500
+        )
         log.debug("Raw LLM chat response: %s", llm_response)
 
-        try:
-            parsed = json.loads(llm_response)
-            if isinstance(parsed, dict) and "response" in parsed and isinstance(parsed["response"], str):
-                try:
-                    inner = json.loads(parsed["response"])
-                    reply = self._sanitize_text(inner.get("reply", parsed["response"]))
-                    suggestions = [self._sanitize_text(s) for s in inner.get("suggestions", [])]
-                except Exception:
-                    reply = self._sanitize_text(parsed["response"])
-                    suggestions = []
-            elif isinstance(parsed, dict):
-                reply = self._sanitize_text(parsed.get("reply", ""))
-                suggestions = [self._sanitize_text(s) for s in parsed.get("suggestions", [])]
+        parsed = self._safe_json_parse(llm_response)
+        
+        # Extract response and suggestions with multiple fallback strategies
+        reply = ""
+        suggestions = []
+        
+        if "error" not in parsed:
+            # Try different response field names
+            reply = (
+                self._sanitize_text(parsed.get("response", "")) or
+                self._sanitize_text(parsed.get("reply", "")) or
+                self._sanitize_text(parsed.get("content", ""))
+            )
+            
+            # Try to get suggestions
+            suggestions_raw = (
+                parsed.get("suggestions", []) or
+                parsed.get("follow_up", []) or
+                parsed.get("prompts", [])
+            )
+            suggestions = [self._sanitize_text(str(s)) for s in suggestions_raw if str(s).strip()][:4]
+        
+        # Fallbacks if parsing failed
+        if not reply:
+            if "error" in parsed and "raw_response" in parsed:
+                reply = parsed["raw_response"]
             else:
-                reply, suggestions = str(parsed), []
-        except Exception as e:
-            log.warning("Failed to parse chat response: %s", e)
-            reply = "I'm having trouble formatting my response. Could you please rephrase your question?"
+                reply = "I'm having trouble formatting my response. Could you please rephrase your question?"
+        
+        if not suggestions:
             suggestions = [
-                "Can you explain that differently?",
-                "What should I know about this topic?",
+                "Can you explain more?",
+                "What should I know next?",
                 "Give me an example",
                 "What's the next step?"
             ]
 
         log.info("Reply generated: %s (suggestions=%d)", reply[:80], len(suggestions))
-        return reply, suggestions
+        return reply, suggestions[:4]  # Ensure max 4 suggestions
 
     async def generate_topic_prompts(
         self,
@@ -219,31 +291,46 @@ class MentorEngine:
         role = role or "default"
         role_prompt = self.prompts["roles"].get(role, self.prompts["roles"]["default"])
         tmpl = self.prompts["tasks"]["generate_topic_prompts"]
-        prompt = tmpl.format(topic=topic, role_prompt=role_prompt, context_description=context_description)
+        
+        prompt = tmpl.format(
+            topic=topic, 
+            role_prompt=role_prompt, 
+            context_description=context_description
+        )
 
         log.debug("Topic prompt content: %s", prompt)
         messages = [{"role": "user", "content": prompt}]
-        resp = await self.conn.generate_chat_completion(messages=messages, temperature=0.5, json_mode=True)
+        
+        resp = await self.conn.generate_chat_completion(
+            messages=messages, 
+            temperature=0.5, 
+            json_mode=True,
+            max_tokens=1024
+        )
         log.debug("Raw topic prompts response: %s", resp)
 
-        try:
-            data = json.loads(resp)
-            if isinstance(data, list):
-                prompts = [self._sanitize_text(str(s)) for s in data if str(s).strip()]
-                log.info("Generated %d topic prompts", len(prompts))
-                return prompts
-            if isinstance(data, dict) and "prompts" in data and isinstance(data["prompts"], list):
-                prompts = [self._sanitize_text(str(s)) for s in data["prompts"] if str(s).strip()]
-                log.info("Generated %d topic prompts", len(prompts))
-                return prompts
-        except Exception as e:
-            log.warning("Failed to parse topic prompts: %s", e)
+        parsed = self._safe_json_parse(resp)
+        
+        prompts = []
+        if "error" not in parsed:
+            # Try different array field names
+            prompts_raw = (
+                parsed if isinstance(parsed, list) else
+                parsed.get("prompts", []) or
+                parsed.get("questions", []) or
+                parsed.get("suggestions", [])
+            )
+            prompts = [self._sanitize_text(str(s)) for s in prompts_raw if str(s).strip()]
 
-        fallback = [
-            f"What are the basics of {topic}?",
-            f"Give me an example of {topic}",
-            f"How to apply {topic} in practice?",
-            f"What are common mistakes with {topic}?",
-        ]
-        log.info("Using fallback topic prompts for %s", topic)
-        return fallback
+        # Fallback prompts if parsing failed
+        if not prompts:
+            prompts = [
+                f"What are the basics of {topic}?",
+                f"Give me an example of {topic}",
+                f"How to apply {topic} in practice?",
+                f"What are common mistakes with {topic}?",
+            ]
+            log.info("Using fallback topic prompts for %s", topic)
+        
+        log.info("Generated %d topic prompts", len(prompts))
+        return prompts[:4]  # Ensure max 4 prompts

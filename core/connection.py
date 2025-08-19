@@ -10,6 +10,26 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
 )
 
+def clean_schema(schema: dict) -> dict:
+    """
+    Recursively remove unsupported fields like 'additionalProperties'
+    from the schema to avoid errors with Gemini's Schema.
+    """
+    if not isinstance(schema, dict):
+        return schema
+
+    cleaned = {}
+    for key, value in schema.items():
+        if key == "additionalProperties":
+            continue  # Gemini does not allow this field
+        if isinstance(value, dict):
+            cleaned[key] = clean_schema(value)
+        elif isinstance(value, list):
+            cleaned[key] = [clean_schema(v) for v in value]
+        else:
+            cleaned[key] = value
+    return cleaned
+
 class Connection:
     def __init__(self) -> None:
         log.debug("Loading environment variables...")
@@ -73,41 +93,91 @@ class Connection:
         cfg = {"temperature": temperature, "max_output_tokens": max_tokens}
         if json_mode:
             cfg["response_mime_type"] = "application/json"
-            cfg["response_schema"] = {
+            cfg["response_schema"] = clean_schema({
                 "type": "object",
-                "properties": {"response": {"type": "string"}},
-                "required": ["response"],
-            }
+                "properties": {
+                    "greeting": {"type": "string"},
+                    "topics": {"type": "array", "items": {"type": "string"}},
+                    "concluding_question": {"type": "string"},
+                    "suggestions": {"type": "array", "items": {"type": "string"}},
+                    "response": {"type": "string"},
+                    "reply": {"type": "string"}
+                }
+            })
         log.debug("Final generation config: %s", cfg)
         return genai.types.GenerationConfig(**cfg)
 
+    @staticmethod
+    def _clean_json_response(text: str) -> str:
+        if not text.strip():
+            return '{"response": "No response generated"}'
+
+        text = text.strip()
+        if text.startswith("```json"):
+            text = text[7:]
+        if text.startswith("```"):
+            text = text[3:]
+        if text.endswith("```"):
+            text = text[:-3]
+
+        text = text.strip()
+        if not text.startswith("{"):
+            start_idx = text.find("{")
+            end_idx = text.rfind("}")
+            if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
+                text = text[start_idx:end_idx + 1]
+            else:
+                return json.dumps({"response": text})
+
+        return text
+
     async def generate_chat_completion(
-    self,
-    messages: List[Dict[str, Any]],
-    temperature: float = 0.5,
-    max_tokens: int = 1024,
-    json_mode: bool = False
-) -> str:
+        self,
+        messages: List[Dict[str, Any]],
+        temperature: float = 0.5,
+        max_tokens: int = 1024,
+        json_mode: bool = False
+    ) -> str:
         log.info("Generating chat completion (messages=%d, json_mode=%s)", len(messages), json_mode)
         history, system = self._prepare_chat_history(messages)
         cfg = self._generation_config(temperature, max_tokens, json_mode)
 
-        # If system prompt exists, prepend it manually as a user message
-        if system:
-            history.insert(0, {"role": "user", "parts": [system]})
-
         try:
-            chat = self._client.start_chat(
-                history=history,
-                enable_automatic_function_calling=False
-            )
-            log.debug("Sending to Gemini: last_user_message=%r", history[-1]["parts"][0] if history else "")
+            if system:
+                model_with_system = genai.GenerativeModel(
+                    self._model_name,
+                    system_instruction=system,
+                    safety_settings=self._client._safety_settings
+                )
+                chat = model_with_system.start_chat(
+                    history=history[:-1] if history else [],
+                    enable_automatic_function_calling=False
+                )
+            else:
+                chat = self._client.start_chat(
+                    history=history[:-1] if history else [],
+                    enable_automatic_function_calling=False
+                )
+
+            last_message = history[-1]["parts"][0] if history else ""
+
+            log.debug("Sending to Gemini: last_user_message=%r", last_message)
             result = await chat.send_message_async(
-                content=history[-1]["parts"][0] if history else "",
+                content=last_message,
                 generation_config=cfg
             )
+
             log.debug("Raw LLM result object: %s", result)
             text = result.text or ""
+
+            if json_mode and text:
+                text = self._clean_json_response(text)
+                try:
+                    json.loads(text)
+                except json.JSONDecodeError as e:
+                    log.warning("JSON validation failed: %s. Raw text: %s", e, text)
+                    text = json.dumps({"response": "I apologize, but I'm having trouble formatting my response properly. Could you please try again?"})
+
             log.info("Received LLM response length=%d", len(text))
             return text
         except Exception as e:
